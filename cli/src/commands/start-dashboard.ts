@@ -1,37 +1,25 @@
-import { execa } from 'execa';
-import path from 'path';
-import chalk from 'chalk';
-import fs from 'fs-extra';
+import { execa } from "execa";
+import fs from "fs-extra";
+import path from "path";
+import os from "os";
+import chalk from "chalk";
 
 export default async function startDashboard() {
-  const cwd = process.cwd();
-  const collectorConfig = path.resolve(cwd, '../collector/config.yaml');
-  const dashboardDir = path.resolve(cwd, '../client');
+  const homeDir = os.homedir();
+  const configDir = path.join(homeDir, ".a2a");
+  const composeFile = path.join(configDir, "docker-compose.yml");
 
-  if (!(await fs.pathExists(collectorConfig))) {
-    console.error(
-      chalk.red('❌ Missing collector config at:'),
-      collectorConfig
-    );
+  if (!(await fs.pathExists(composeFile))) {
+    console.error(chalk.red("❌ Missing docker-compose.yml. Run `a2a init` first."));
     process.exit(1);
   }
 
-  console.log(chalk.blue('🚀 Starting telemetry stack...'));
-
-  execa('otelcol', ['--config', collectorConfig], { stdio: 'inherit' });
-  execa('prometheus', ['--config.file=../collector/prometheus.yml'], {
-    stdio: 'inherit',
-  });
-  execa('loki', ['--config.file=../collector/loki-config.yml'], {
-    stdio: 'inherit',
-  });
-  execa('tempo', ['--config.file=../collector/tempo-config.yml'], {
-    stdio: 'inherit',
-  });
-
-  if (await fs.pathExists(dashboardDir)) {
-    execa('npm', ['run', 'dev'], { cwd: dashboardDir, stdio: 'inherit' });
-  } else {
-    console.warn(chalk.yellow('⚠️ Dashboard not found at:'), dashboardDir);
+  console.log(chalk.blue("🚀 Starting A2A telemetry stack with Docker..."));
+  try {
+    await execa("docker", ["compose", "-f", composeFile, "up"], {
+      stdio: "inherit",
+    });
+  } catch (err) {
+    console.error(chalk.red("❌ Failed to start dashboard stack:"), err);
   }
 }
