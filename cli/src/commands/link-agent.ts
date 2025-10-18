@@ -1,105 +1,95 @@
-import fs from 'fs-extra';
-import path from 'path';
-import { randomUUID } from 'crypto';
-import chalk from 'chalk';
+import fs from "fs-extra";
+import path from "path";
+import { randomUUID } from "crypto";
+import chalk from "chalk";
+import prompts from "prompts";
 
 export default async function link(opts: { name?: string }) {
   try {
     const cwd = process.cwd();
 
+    // Global config from init (~/.a2a/config.json)
     const homeDir = process.env.HOME || process.env.USERPROFILE!;
-    const globalConfigPath = path.join(homeDir, '.a2a', 'config.json');
+    const globalConfigPath = path.join(homeDir, ".a2a", "config.json");
+    const globalAgentsPath = path.join(homeDir, ".a2a", "agents.json");
 
     if (!(await fs.pathExists(globalConfigPath))) {
       console.error(
-        chalk.red('❌ Global A2A config not found. Run `a2a init` first.')
+        chalk.red("❌ Global A2A config not found. Run `a2a init` first.")
       );
       process.exit(1);
     }
 
     const globalConfig = await fs.readJson(globalConfigPath);
 
-    const agentConfigPath = path.join(cwd, '.a2a.config.json');
-    const readmePath = path.join(cwd, 'a2a.README.md');
+    // Ask user for metadata
+    const responses = await prompts([
+      {
+        type: "text",
+        name: "agentName",
+        message: "What is this agent's name?",
+        initial: opts.name || path.basename(cwd),
+      },
+      {
+        type: "text",
+        name: "role",
+        message: "What is this agent's role?",
+      },
+      {
+        type: "list",
+        name: "connectedAgents",
+        message:
+          "List the agents this one connects to (comma separated, e.g. planner,executor)",
+        separator: ",",
+      },
+      {
+        type: "list",
+        name: "methods",
+        message:
+          "List the methods or capabilities this agent provides (comma separated)",
+        separator: ",",
+      },
+    ]);
 
     const config = {
       agentId: randomUUID(),
-      agentName: opts.name || path.basename(cwd),
-      endpoint: globalConfig.collector.endpoint,
+      agentName: responses.agentName,
+      role: responses.role || "Agent",
+      connectedAgents: responses.connectedAgents || [],
+      methods: responses.methods || [],
+      endpoint: globalConfig.collector.endpointHttp,
+      grpcEndpoint: globalConfig.collector.endpointGrpc,
       token: globalConfig.collector.token,
-      metricPort: 9464,
+      metricPort: globalConfig.ports.prometheusExporter,
     };
 
+    // Write per-project agent config
+    const agentConfigPath = path.join(cwd, ".a2a.config.json");
     await fs.writeJson(agentConfigPath, config, { spaces: 2 });
 
-    const readmeContent = `# A2A Telemetry Setup for ${config.agentName}
-
-This project has been linked to the local A2A telemetry system.
-Configuration file generated: \`.a2a.config.json\`
-
----
-
-## JavaScript (Node.js)
-
-Install the CLI:
-\`\`\`bash
-npm install a2a-cli
-\`\`\`
-
-Then import telemetry in your entrypoint:
-\`\`\`js
-import { startTelemetry } from "a2a-cli/telemetry";
-await startTelemetry("./.a2a.config.json");
-\`\`\`
-
----
-
-## Python
-
-Install OpenTelemetry packages:
-\`\`\`bash
-pip install opentelemetry-sdk opentelemetry-exporter-otlp opentelemetry-instrumentation
-\`\`\`
-
-Add this to your Python entrypoint:
-\`\`\`python
-import json
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry import trace
-
-with open(".a2a.config.json") as f:
-    config = json.load(f)
-
-resource = Resource.create({
-    "service.name": config["agentName"],
-    "a2a.agent.id": config["agentId"]
-})
-
-trace_exporter = OTLPSpanExporter(
-    endpoint=config["endpoint"],
-    headers={"Authorization": f"Bearer {config['token']}"}
-)
-
-provider = TracerProvider(resource=resource)
-provider.add_span_processor(BatchSpanProcessor(trace_exporter))
-trace.set_tracer_provider(provider)
-
-print(f"📡 Telemetry started for {config['agentName']}")
-\`\`\`
-
----
-
-✅ Both examples read from the same \`.a2a.config.json\`.  
-`;
-
-    await fs.writeFile(readmePath, readmeContent, 'utf8');
+    // Update global agent registry (~/.a2a/agents.json)
+    let registry: any[] = [];
+    if (await fs.pathExists(globalAgentsPath)) {
+      registry = await fs.readJson(globalAgentsPath);
+    }
+    // Overwrite if agent with same name exists
+    const filtered = registry.filter((a) => a.agentName !== config.agentName);
+    filtered.push({
+      agentId: config.agentId,
+      agentName: config.agentName,
+      role: config.role,
+      connectedAgents: config.connectedAgents,
+      methods: config.methods,
+    });
+    await fs.writeJson(globalAgentsPath, filtered, { spaces: 2 });
 
     console.log(chalk.green(`✅ Linked agent "${config.agentName}"`));
-    console.log(chalk.gray(`Created .a2a.config.json and a2a.bootstrap.js`));
+    console.log(
+      chalk.gray(
+        `Created .a2a.config.json in ${cwd} and updated ~/.a2a/agents.json`
+      )
+    );
   } catch (err) {
-    console.error(chalk.red('❌ Failed to link agent:'), err);
+    console.error(chalk.red("❌ Failed to link agent:"), err);
   }
 }
