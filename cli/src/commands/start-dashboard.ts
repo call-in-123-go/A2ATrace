@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import { execa } from 'execa';
 import chalk from 'chalk';
 import express from 'express';
+// NEW:
+import cors from 'cors';
 
 // ✅ ESM-compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -62,7 +64,13 @@ export default async function startDashboard() {
     const app = express();
     const dashboardPort = config.ports.dashboard || 4000;
 
-    // API route
+    // NEW: common middleware for API
+    app.use(cors());
+    app.use(express.json({ limit: '2mb' }));
+
+    // =========================
+    // API: Config for client
+    // =========================
     app.get('/api/config', async (_req, res) => {
       let agents: any[] = [];
       if (await fs.pathExists(agentsPath)) {
@@ -80,9 +88,100 @@ export default async function startDashboard() {
       });
     });
 
-    // 🔹 Serve React dashboard build
-    let frontendPath = path.join(packageRoot, 'client-dist'); // Published package
+    // =========================
+    // NEW: Loki proxy routes
+    // =========================
+    const lokiPort = config?.ports?.loki;
+    if (!lokiPort) {
+      console.warn(
+        chalk.yellow(
+          '⚠️ ports.loki missing in config; Loki routes will not work'
+        )
+      );
+    } else {
+      const lokiBase = `http://localhost:${lokiPort}`;
 
+      // Label values (e.g., service_name)
+      app.get('/api/logs/labels/:name/values', async (req, res) => {
+        try {
+          const url = new URL(
+            `${lokiBase}/loki/api/v1/label/${encodeURIComponent(
+              req.params.name
+            )}/values`
+          );
+          const r = await fetch(url);
+          const data = await r.json();
+          res.json(data); // { status, data: string[] }
+        } catch (e) {
+          res.status(500).json({ error: String(e) });
+        }
+      });
+
+      // Series discovery (optional)
+      app.get('/api/logs/series', async (req, res) => {
+        try {
+          const endMs = Number(req.query.end ?? Date.now());
+          const startMs = Number(req.query.start ?? endMs - 5 * 60_000);
+          const url = new URL(`${lokiBase}/loki/api/v1/series`);
+          url.searchParams.set('start', String(startMs * 1_000_000)); // ms -> ns
+          url.searchParams.set('end', String(endMs * 1_000_000));
+          const match = req.query.match;
+          if (Array.isArray(match))
+            match.forEach((m) => url.searchParams.append('match[]', String(m)));
+          else if (match) url.searchParams.append('match[]', String(match));
+          const r = await fetch(url);
+          const data = await r.json();
+          res.json(data); // { status, data: Array<Record<string,string>> }
+        } catch (e) {
+          res.status(500).json({ error: String(e) });
+        }
+      });
+
+      // Instant query (point-in-time)
+      app.get('/api/logs/query', async (req, res) => {
+        try {
+          const url = new URL(`${lokiBase}/loki/api/v1/query`);
+          if (req.query.query)
+            url.searchParams.set('query', String(req.query.query));
+          if (req.query.time)
+            url.searchParams.set('time', String(req.query.time)); // RFC3339 or ns
+          const r = await fetch(url);
+          const data = await r.json();
+          res.json(data);
+        } catch (e) {
+          res.status(500).json({ error: String(e) });
+        }
+      });
+
+      // Range query (best for UI lists / polling)
+      app.get('/api/logs/query_range', async (req, res) => {
+        try {
+          const endMs = Number(req.query.end ?? Date.now());
+          const startMs = Number(req.query.start ?? endMs - 5 * 60_000); // default 5m
+          const limit = String(req.query.limit ?? '500');
+          const dir = String(req.query.direction ?? 'backward'); // or "forward"
+          const query = String(req.query.query ?? '{}'); // LogQL selector + pipes
+
+          const url = new URL(`${lokiBase}/loki/api/v1/query_range`);
+          url.searchParams.set('query', query);
+          url.searchParams.set('start', String(startMs * 1_000_000)); // ms -> ns
+          url.searchParams.set('end', String(endMs * 1_000_000));
+          url.searchParams.set('limit', limit);
+          url.searchParams.set('direction', dir);
+
+          const r = await fetch(url);
+          const data = await r.json();
+          res.json(data);
+        } catch (e) {
+          res.status(500).json({ error: String(e) });
+        }
+      });
+    }
+
+    // =========================
+    // Serve React dashboard build
+    // =========================
+    let frontendPath = path.join(packageRoot, 'client-dist'); // Published package
     if (!(await fs.pathExists(frontendPath))) {
       // Fallback for monorepo dev mode
       frontendPath = path.join(packageRoot, '../client/dist');
@@ -93,7 +192,6 @@ export default async function startDashboard() {
 
     if (await fs.pathExists(frontendPath)) {
       console.log(chalk.green('✅ Serving frontend from:'), frontendPath);
-
       app.use(express.static(frontendPath));
       app.get(/.*/, (_req, res) => {
         res.sendFile(path.join(frontendPath, 'index.html'));
