@@ -14,7 +14,7 @@ export default async function init() {
 
   await fs.ensureDir(configDir);
 
-  // 🔹 Find dynamic ports
+  // 🔹 Pick dynamic HOST ports
   const collectorHttpPort = await findPort({ start: 4318 });
   const collectorGrpcPort = await findPort({ start: 4317 });
   const promExporterPort = await findPort({ start: 9464 });
@@ -41,27 +41,29 @@ export default async function init() {
       },
     };
     await fs.writeJson(configPath, config, { spaces: 2 });
-    console.log(chalk.green("✅ Wrote global config.json with dynamic collector endpoints"));
+    console.log(
+      chalk.green("✅ Wrote global config.json with dynamic collector endpoints")
+    );
   }
 
-  // 🔹 Collector config
+  // 🔹 Collector config (fixed container ports!)
   if (!(await fs.pathExists(collectorPath))) {
     const collectorYaml = `
 receivers:
   otlp:
     protocols:
       http:
-        endpoint: 0.0.0.0:${collectorHttpPort}
+        endpoint: 0.0.0.0:4318
       grpc:
-        endpoint: 0.0.0.0:${collectorGrpcPort}
+        endpoint: 0.0.0.0:4317
 
 exporters:
   prometheus:
-    endpoint: "0.0.0.0:${promExporterPort}"
+    endpoint: "0.0.0.0:8889"
   loki:
-    endpoint: "http://loki:${lokiPort}/loki/api/v1/push"
+    endpoint: "http://loki:3100/loki/api/v1/push"
   tempo:
-    endpoint: "http://tempo:${collectorGrpcPort}" # gRPC
+    endpoint: "http://tempo:3200"
 
 processors:
   batch:
@@ -82,10 +84,10 @@ service:
       exporters: [loki]
 `;
     await fs.writeFile(collectorPath, collectorYaml, "utf8");
-    console.log(chalk.green("✅ Wrote collector-config.yaml with dynamic ports"));
+    console.log(chalk.green("✅ Wrote collector-config.yaml with fixed container ports"));
   }
 
-  // 🔹 Prometheus config
+  // 🔹 Prometheus config (fixed container port reference)
   if (!(await fs.pathExists(prometheusPath))) {
     const prometheusYaml = `
 global:
@@ -94,13 +96,13 @@ global:
 scrape_configs:
   - job_name: "a2a-agents"
     static_configs:
-      - targets: ["otel-collector:${promExporterPort}"]
+      - targets: ["otel-collector:8889"]
 `;
     await fs.writeFile(prometheusPath, prometheusYaml, "utf8");
     console.log(chalk.green("✅ Wrote prometheus.yml"));
   }
 
-  // 🔹 Docker Compose
+  // 🔹 Docker Compose (host dynamic → container fixed)
   if (!(await fs.pathExists(dockerComposePath))) {
     const dockerYaml = `
 version: "3.8"
@@ -112,10 +114,9 @@ services:
     volumes:
       - ${collectorPath}:/etc/otel-collector-config.yaml
     ports:
-      - "${collectorGrpcPort}:${collectorGrpcPort}"
-      - "${collectorHttpPort}:${collectorHttpPort}"
-      - "8889:8889"
-      - "${promExporterPort}:${promExporterPort}"
+      - "${collectorGrpcPort}:4317"
+      - "${collectorHttpPort}:4318"
+      - "${promExporterPort}:8889"
 
   prometheus:
     image: prom/prometheus:latest
@@ -135,10 +136,11 @@ services:
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
       - "${tempoPort}:3200"
-      - "${collectorGrpcPort}:${collectorGrpcPort}"
 `;
     await fs.writeFile(dockerComposePath, dockerYaml, "utf8");
-    console.log(chalk.green("✅ Wrote docker-compose.yml with dynamic ports"));
+    console.log(
+      chalk.green("✅ Wrote docker-compose.yml with dynamic host → fixed container ports")
+    );
   }
 
   console.log(chalk.blue(`ℹ️ A2A initialized at ${configDir}`));
