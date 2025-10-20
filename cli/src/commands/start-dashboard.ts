@@ -47,10 +47,9 @@ export default async function startDashboard() {
       chalk.gray('   Loki:'),
       `http://localhost:${config.ports.loki}`
     );
-    console.log(
-      chalk.gray('   Tempo:'),
-      `http://localhost:${config.ports.tempo}`
-    );
+   console.log(chalk.gray("   Tempo HTTP:"), `http://localhost:${config.ports.tempoHttp}`);
+   console.log(chalk.gray("   Tempo gRPC:"), `localhost:${config.ports.tempoGrpc}`); 
+
     console.log(
       chalk.gray('   Collector HTTP:'),
       config.collector.endpointHttp
