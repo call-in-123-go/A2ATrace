@@ -4,7 +4,6 @@ import { fileURLToPath } from 'url';
 import { execa } from 'execa';
 import chalk from 'chalk';
 import express from 'express';
-// NEW:
 import cors from 'cors';
 
 // ✅ ESM-compatible __dirname
@@ -13,6 +12,45 @@ const __dirname = path.dirname(__filename);
 
 // ✅ Always resolve relative to package root (cli/)
 const packageRoot = path.resolve(__dirname, '../..');
+
+/**
+ * Uses 'docker compose port' to find the dynamically mapped host port for a service.
+ * @param composeFile Path to the docker-compose.yml file.
+ * @param serviceName The name of the service in the compose file (e.g., 'prometheus').
+ * @param internalPort The internal port the service exposes (e.g., 9090).
+ * @returns The dynamically mapped host port, or undefined if detection fails.
+ */
+async function getHostPort(
+  composeFile: string,
+  serviceName: string,
+  internalPort: number
+): Promise<number | undefined> {
+  try {
+    // Command: docker compose -f <composeFile> port <serviceName> <internalPort>
+    const { stdout } = await execa('docker', [
+      'compose',
+      '-f',
+      composeFile,
+      'port',
+      serviceName,
+      String(internalPort),
+    ]);
+
+    // stdout is expected to be in the format "0.0.0.0:<port>" or "<host>:<port>". We extract the port.
+    const portMatch = stdout.trim().match(/:(\d+)$/);
+
+    if (portMatch) {
+      const port = parseInt(portMatch[1], 10);
+      // console.log(chalk.cyan(`🔄 Detected host port for ${serviceName}:${internalPort} is ${port}`));
+      return port;
+    }
+    return undefined;
+  } catch (error) {
+    // Suppress detailed error log unless needed for debugging, use warn
+    // console.warn(chalk.yellow(`⚠️ Warning: Could not auto-detect host port for ${serviceName}:${internalPort}. Error: ${error.message}`));
+    return undefined;
+  }
+}
 
 export default async function startDashboard() {
   try {
@@ -30,6 +68,7 @@ export default async function startDashboard() {
       process.exit(1);
     }
 
+    // Load config (we will mutate this object with the dynamic port)
     const config = await fs.readJson(configPath);
 
     // Start docker compose
@@ -38,7 +77,81 @@ export default async function startDashboard() {
       stdio: 'inherit',
     });
 
+    // --- DYNAMIC PORT DETECTION ---
+
+    // 1. Prometheus (Service: prometheus, Internal Port: 9090)
+    const dynamicPrometheusPort = await getHostPort(
+      dockerComposePath,
+      'prometheus',
+      9090
+    );
+    if (dynamicPrometheusPort) {
+      config.ports.prometheus = dynamicPrometheusPort;
+    }
+
+    // 2. Loki (Service: loki, Internal Port: 3100)
+    const dynamicLokiPort = await getHostPort(dockerComposePath, 'loki', 3100);
+    if (dynamicLokiPort) {
+      config.ports.loki = dynamicLokiPort;
+    }
+
+    // 3. Tempo HTTP (Service: tempo, Internal Port: 3200)
+    const dynamicTempoHttpPort = await getHostPort(
+      dockerComposePath,
+      'tempo',
+      3200
+    );
+    if (dynamicTempoHttpPort) {
+      config.ports.tempoHttp = dynamicTempoHttpPort;
+    }
+
+    // 4. Collector OTLP HTTP (Service: otel-collector, Internal Port: 4318)
+    const dynamicCollectorHttpPort = await getHostPort(
+      dockerComposePath,
+      'otel-collector',
+      4318
+    );
+    if (dynamicCollectorHttpPort) {
+      // CRITICAL: Update the entire endpoint string
+      config.collector.endpointHttp = `http://localhost:${dynamicCollectorHttpPort}/v1/traces`;
+    }
+
+    // 5. Collector OTLP gRPC (Service: otel-collector, Internal Port: 4317)
+    const dynamicCollectorGrpcPort = await getHostPort(
+      dockerComposePath,
+      'otel-collector',
+      4317
+    );
+    if (dynamicCollectorGrpcPort) {
+      // CRITICAL: Update the entire endpoint string
+      config.collector.endpointGrpc = `localhost:${dynamicCollectorGrpcPort}`;
+    }
+
+    // If any port was dynamically detected, log the override for clarity.
+    const allDetectedPorts = [
+      dynamicPrometheusPort,
+      dynamicLokiPort,
+      dynamicTempoHttpPort,
+      dynamicCollectorHttpPort,
+      dynamicCollectorGrpcPort,
+    ].filter((p) => p !== undefined);
+    if (allDetectedPorts.length > 0) {
+      console.log(
+        chalk.cyan(
+          `🔄 Dynamically detected and overriding ${allDetectedPorts.length} host port(s).`
+        )
+      );
+    } else {
+      console.warn(
+        chalk.yellow(
+          `⚠️ No dynamic ports detected. Using configured ports. Ensure services are running.`
+        )
+      );
+    }
+    // ----------------------------
+
     console.log(chalk.green('✅ Telemetry stack running!'));
+    // Use the potentially updated config.ports for logging
     console.log(
       chalk.gray('   Prometheus:'),
       `http://localhost:${config.ports.prometheus}`
@@ -47,8 +160,14 @@ export default async function startDashboard() {
       chalk.gray('   Loki:'),
       `http://localhost:${config.ports.loki}`
     );
-   console.log(chalk.gray("   Tempo HTTP:"), `http://localhost:${config.ports.tempoHttp}`);
-   console.log(chalk.gray("   Tempo gRPC:"), `localhost:${config.ports.tempoGrpc}`); 
+    console.log(
+      chalk.gray('   Tempo HTTP:'),
+      `http://localhost:${config.ports.tempoHttp}`
+    );
+    console.log(
+      chalk.gray('   Tempo gRPC:'),
+      `${config.collector.endpointGrpc}`
+    );
 
     console.log(
       chalk.gray('   Collector HTTP:'),
@@ -70,6 +189,7 @@ export default async function startDashboard() {
     // =========================
     // API: Config for client
     // =========================
+    // This endpoint now returns the dynamically detected ports
     app.get('/api/config', async (_req, res) => {
       let agents: any[] = [];
       if (await fs.pathExists(agentsPath)) {
@@ -77,9 +197,10 @@ export default async function startDashboard() {
       }
       res.json({
         telemetry: {
+          // This uses the dynamically updated ports
           prometheusUrl: `http://localhost:${config.ports.prometheus}`,
           lokiUrl: `http://localhost:${config.ports.loki}`,
-          tempoUrl: `http://localhost:${config.ports.tempo}`,
+          tempoUrl: `http://localhost:${config.ports.tempoHttp}`,
           collectorHttp: config.collector.endpointHttp,
           collectorGrpc: config.collector.endpointGrpc,
         },
@@ -90,6 +211,7 @@ export default async function startDashboard() {
     // =========================
     // NEW: Loki proxy routes
     // =========================
+    // Loki port now relies on the dynamically set port
     const lokiPort = config?.ports?.loki;
     if (!lokiPort) {
       console.warn(
@@ -199,7 +321,7 @@ export default async function startDashboard() {
       console.warn(
         chalk.yellow('⚠️ No frontend build found — running in API-only mode')
       );
-    }
+    } 
 
     // Start server
     app.listen(dashboardPort, () => {
@@ -211,3 +333,4 @@ export default async function startDashboard() {
     console.error(chalk.red('❌ Failed to start dashboard stack:'), err);
   }
 }
+  

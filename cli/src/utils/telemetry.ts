@@ -29,7 +29,7 @@ export async function startTelemetry(agentConfigPath: string) {
   const mergedResource = detected.merge(custom);
 
   // 🔹 Metrics
-  const prometheusPort = config.metricPort || 9464;
+  const prometheusPort = config.metricPort;
   const prometheusExporter = new PrometheusExporter({ port: prometheusPort });
   console.log(
     `📊 Prometheus metrics available at http://localhost:${prometheusPort}/metrics`

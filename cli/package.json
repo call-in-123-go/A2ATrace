@@ -1,0 +1,58 @@
+{
+  "name": "a2a-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "a2a": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./telemetry": "./dist/utils/telemetry.js"
+  },
+  "scripts": {
+    "dev": "node --import ./register-ts-node.mjs src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api-logs": "^0.206.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.65.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.206.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
+    "@opentelemetry/resources": "^2.1.0",
+    "@opentelemetry/sdk-logs": "^0.206.0",
+    "@opentelemetry/sdk-node": "^0.206.0",
+    "@opentelemetry/semantic-conventions": "^1.37.0",
+    "commander": "^14.0.1",
+    "cors": "^2.8.5",
+    "execa": "^9.6.0",
+    "express": "^5.1.0",
+    "find-open-port": "^2.0.3",
+    "framer-motion": "^12.23.24",
+    "fs-extra": "^11.3.2",
+    "prompts": "^2.4.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.9.4",
+    "sass": "^1.93.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/cors": "^2.8.19",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^24.7.2",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react-swc": "^4.1.0",
+    "eslint": "^9.36.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.22",
+    "globals": "^16.4.0",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.45.0",
+    "vite": "^7.1.7"
+  }
+}
